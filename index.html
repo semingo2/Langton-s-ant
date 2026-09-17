@@ -1,0 +1,1351 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>2匹のラングトンのアリ シミュレーター</title>
+<style>
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    font-family: Arial, "Yu Gothic", sans-serif;
+    background: #eeeeee;
+    color: #222;
+    overflow: hidden;
+}
+
+.control-panel {
+    background: #fff;
+    border-bottom: 1px solid #aaa;
+    padding: 10px 14px;
+    box-shadow: 0 2px 5px rgba(0,0,0,.12);
+    position: relative;
+    z-index: 10;
+}
+
+.row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin-bottom: 8px;
+}
+
+.row:last-child {
+    margin-bottom: 0;
+}
+
+button, select, input {
+    font-size: 14px;
+}
+
+button {
+    border: 1px solid #999;
+    background: #f8f8f8;
+    border-radius: 5px;
+    padding: 7px 12px;
+    cursor: pointer;
+}
+
+button:hover {
+    background: #e8e8e8;
+}
+
+button:active {
+    background: #d8d8d8;
+}
+
+select {
+    padding: 6px 8px;
+    border: 1px solid #999;
+    border-radius: 5px;
+    background: #fff;
+}
+
+input[type="number"] {
+    width: 110px;
+    padding: 6px;
+    border: 1px solid #999;
+    border-radius: 5px;
+}
+
+#speedSlider {
+    width: 220px;
+}
+
+#speedValue {
+    display: inline-block;
+    min-width: 58px;
+    font-weight: bold;
+}
+
+#status {
+    font-weight: bold;
+    margin-left: 8px;
+}
+
+#stepCount {
+    font-weight: bold;
+}
+
+.label {
+    font-weight: bold;
+    margin-left: 4px;
+}
+
+.ant1-label {
+    color: #d00000;
+}
+
+.ant2-label {
+    color: #0055cc;
+}
+
+.info {
+    font-size: 13px;
+    color: #555;
+}
+
+.grid-wrapper {
+    width: 100vw;
+    height: calc(100vh - 132px);
+    overflow: hidden;
+    background: #aaa;
+    position: relative;
+    cursor: default;
+}
+
+#gridCanvas {
+    display: block;
+    background: #fff;
+    image-rendering: pixelated;
+}
+</style>
+</head>
+
+<body>
+
+<div class="control-panel">
+
+    <div class="row">
+        <button id="startStopButton">開始</button>
+        <button id="stepButton">1マス進む</button>
+        <button id="resetButton">リセット</button>
+
+        <span class="label">間隔：</span>
+        <input
+            id="spacingInput"
+            type="number"
+            min="0"
+            step="1"
+            value="0"
+            inputmode="numeric"
+        >
+        <span>マス</span>
+
+        <span class="label">現在：</span>
+        <strong id="spacingValue">0</strong>
+        <span>マス</span>
+    </div>
+
+    <div class="row">
+        <span class="label">向きを変更：</span>
+
+        <span class="label ant1-label">アリ1：</span>
+        <select id="ant1Direction">
+            <option value="0" selected>上</option>
+            <option value="1">右</option>
+            <option value="2">下</option>
+            <option value="3">左</option>
+        </select>
+
+        <span class="label ant2-label">アリ2：</span>
+        <select id="ant2Direction">
+            <option value="0" selected>上</option>
+            <option value="1">右</option>
+            <option value="2">下</option>
+            <option value="3">左</option>
+        </select>
+    </div>
+
+    <div class="row">
+        <span class="label">速度：</span>
+        <input
+            id="speedSlider"
+            type="range"
+            min="100"
+            max="10000"
+            value="1000"
+            step="1"
+        >
+        <span id="speedValue">1000</span>
+        <span>step/s</span>
+
+        <span class="label">マスサイズ：</span>
+        <select id="cellSizeSelect">
+            <option value="5" selected>5 px</option>
+            <option value="10">10 px</option>
+            <option value="20">20 px</option>
+        </select>
+
+        <span>
+            ステップ数：
+            <strong id="stepCount">0</strong>
+        </span>
+
+        <span id="status">停止中</span>
+    </div>
+
+    <div class="info">
+        スクロールで盤面を移動できます（マスサイズは変わりません）｜
+        盤面：実質無制限（必要なマスだけ記録）｜
+        白 → 黒・右90°回転・前進 ／ 黒 → 白・左90°回転・前進
+        ｜ 赤＝アリ1、青＝アリ2
+    </div>
+
+</div>
+
+<div class="grid-wrapper" id="gridWrapper">
+    <canvas id="gridCanvas"></canvas>
+</div>
+
+<script>
+"use strict";
+
+/*
+=========================================================
+    盤面について
+
+    以前の「300×200」「500×400」のような固定サイズを廃止。
+
+    白マスは保存する必要がないため、
+    黒になったマスだけを座標で記録する。
+
+    そのため、盤面のX,Y座標そのものには固定上限を設けない。
+    アリが +100000 や -100000 の位置に行っても管理できる。
+
+    描画するのは現在画面に見えている範囲だけ。
+=========================================================
+*/
+
+const canvas = document.getElementById("gridCanvas");
+const ctx = canvas.getContext("2d", { alpha: false });
+
+const gridWrapper = document.getElementById("gridWrapper");
+
+const startStopButton =
+    document.getElementById("startStopButton");
+
+const stepButton =
+    document.getElementById("stepButton");
+
+const resetButton =
+    document.getElementById("resetButton");
+
+const spacingInput =
+    document.getElementById("spacingInput");
+
+const spacingValue =
+    document.getElementById("spacingValue");
+
+const ant1DirectionSelect =
+    document.getElementById("ant1Direction");
+
+const ant2DirectionSelect =
+    document.getElementById("ant2Direction");
+
+const speedSlider =
+    document.getElementById("speedSlider");
+
+const speedValue =
+    document.getElementById("speedValue");
+
+const cellSizeSelect =
+    document.getElementById("cellSizeSelect");
+
+const stepCountDisplay =
+    document.getElementById("stepCount");
+
+const statusDisplay =
+    document.getElementById("status");
+
+
+/*
+=========================================================
+    無限盤面
+
+    blackRows:
+      Map<y座標, Set<x座標>>
+
+    例：
+      y=10 の x=3,4,7 が黒なら
+      blackRows.get(10) = Set([3,4,7])
+
+    白マスはデータを持たない。
+=========================================================
+*/
+
+const blackRows = new Map();
+
+
+function isBlack(x, y) {
+    const row = blackRows.get(y);
+    return row ? row.has(x) : false;
+}
+
+
+function setCellState(x, y, black) {
+
+    if (black) {
+
+        let row = blackRows.get(y);
+
+        if (!row) {
+            row = new Set();
+            blackRows.set(y, row);
+        }
+
+        row.add(x);
+
+    } else {
+
+        const row = blackRows.get(y);
+
+        if (!row) {
+            return;
+        }
+
+        row.delete(x);
+
+        if (row.size === 0) {
+            blackRows.delete(y);
+        }
+    }
+}
+
+
+function clearBoard() {
+    blackRows.clear();
+}
+
+
+/*
+=========================================================
+    アリ
+
+    x,y は固定グリッドの範囲に制限しない。
+=========================================================
+*/
+
+const ants = [
+    {
+        x: 0,
+        y: 0,
+        direction: 0,
+        stopped: false
+    },
+
+    {
+        x: 0,
+        y: 0,
+        direction: 0,
+        stopped: false
+    }
+];
+
+
+/*
+    0 = 上
+    1 = 右
+    2 = 下
+    3 = 左
+*/
+
+const DX = [0, 1, 0, -1];
+const DY = [-1, 0, 1, 0];
+
+
+let spacing = 0;
+let cellSize = 5;
+let stepsPerSecond = 1000;
+let stepCount = 0;
+
+let running = false;
+
+let lastTime = 0;
+let accumulatedTime = 0;
+
+
+/*
+=========================================================
+    画面のワールド座標
+
+    viewX / viewY は
+    Canvas左上に表示するマスのワールド座標。
+=========================================================
+*/
+
+let viewX = 0;
+let viewY = 0;
+
+
+/*
+=========================================================
+    Canvasサイズ
+=========================================================
+*/
+
+function resizeCanvas() {
+
+    const width =
+        Math.max(1, gridWrapper.clientWidth);
+
+    const height =
+        Math.max(1, gridWrapper.clientHeight);
+
+    /*
+      CSSピクセルとCanvas内部サイズを一致させる。
+    */
+
+    canvas.width = width;
+    canvas.height = height;
+
+    draw();
+}
+
+
+/*
+=========================================================
+    画面中央をアリ2匹の中点に合わせる
+
+    初期状態・マスサイズ変更後などに使う。
+=========================================================
+*/
+
+function centerViewOnAnts() {
+
+    const centerWorldX =
+        (ants[0].x + ants[1].x) / 2;
+
+    const centerWorldY =
+        (ants[0].y + ants[1].y) / 2;
+
+    const visibleCols =
+        canvas.width / cellSize;
+
+    const visibleRows =
+        canvas.height / cellSize;
+
+    viewX =
+        centerWorldX - visibleCols / 2;
+
+    viewY =
+        centerWorldY - visibleRows / 2;
+
+    draw();
+}
+
+
+/*
+=========================================================
+    初期配置
+
+    盤面そのものは無限。
+
+    0,0付近を中心として
+    2匹を横一列に置く。
+=========================================================
+*/
+
+function setInitialPositions() {
+
+    /*
+      間隔0：
+        [アリ1][アリ2]
+
+      間隔1：
+        [アリ1][空][アリ2]
+    */
+
+    const distance = spacing + 1;
+
+    /*
+      2匹の中点がX=0付近になるようにする。
+    */
+
+    const x1 =
+        -Math.floor(distance / 2);
+
+    const x2 =
+        x1 + distance;
+
+    ants[0].x = x1;
+    ants[0].y = 0;
+
+    ants[1].x = x2;
+    ants[1].y = 0;
+
+    /*
+      現在の向き設定を使用。
+      リセット・再配置でも設定は維持。
+    */
+
+    ants[0].direction =
+        Number(ant1DirectionSelect.value);
+
+    ants[1].direction =
+        Number(ant2DirectionSelect.value);
+
+    ants[0].stopped = false;
+    ants[1].stopped = false;
+}
+
+
+/*
+=========================================================
+    リセット
+
+    向きと間隔は維持する。
+=========================================================
+*/
+
+function resetSimulation() {
+
+    running = false;
+
+    startStopButton.textContent = "開始";
+    statusDisplay.textContent = "停止中";
+
+    stepCount = 0;
+    stepCountDisplay.textContent = "0";
+
+    clearBoard();
+
+    setInitialPositions();
+
+    centerViewOnAnts();
+}
+
+
+/*
+=========================================================
+    1ステップ
+
+    2匹の「現在のマス」を先に全部読み取る。
+
+    その後に、
+      1. マス反転
+      2. 方向変更
+      3. 前進
+
+    を行う。
+
+    これにより、
+    アリ1の変更が同じステップ中に
+    アリ2の判断へ影響しない。
+=========================================================
+*/
+
+function stepSimulation() {
+
+    const operations = [];
+
+    /*
+      第1段階：
+      現在の状態を2匹とも先に読む。
+    */
+
+    for (let i = 0; i < 2; i++) {
+
+        const ant = ants[i];
+
+        if (ant.stopped) {
+            operations.push(null);
+            continue;
+        }
+
+        const wasBlack =
+            isBlack(ant.x, ant.y);
+
+        /*
+          白 → 右
+          黒 → 左
+        */
+
+        const newDirection =
+            wasBlack
+                ? (ant.direction + 3) % 4
+                : (ant.direction + 1) % 4;
+
+        /*
+          白 → 黒
+          黒 → 白
+        */
+
+        const newCellState =
+            !wasBlack;
+
+        operations.push({
+            x: ant.x,
+            y: ant.y,
+            newDirection,
+            newCellState
+        });
+    }
+
+
+    /*
+      第2段階：
+      2匹分のマス変更と方向変更。
+    */
+
+    for (let i = 0; i < 2; i++) {
+
+        const op = operations[i];
+
+        if (!op) continue;
+
+        setCellState(
+            op.x,
+            op.y,
+            op.newCellState
+        );
+
+        ants[i].direction =
+            op.newDirection;
+    }
+
+
+    /*
+      第3段階：
+      2匹を同じステップで前進。
+    */
+
+    for (let i = 0; i < 2; i++) {
+
+        const op = operations[i];
+
+        if (!op) continue;
+
+        const ant = ants[i];
+
+        ant.x += DX[ant.direction];
+        ant.y += DY[ant.direction];
+    }
+
+    stepCount++;
+
+    stepCountDisplay.textContent =
+        stepCount.toLocaleString();
+}
+
+
+/*
+=========================================================
+    描画
+
+    「無限全部」を描画することはしない。
+    現在画面に見える範囲だけ描画する。
+
+    これにより盤面の座標が非常に大きくなっても、
+    表示処理量は画面サイズに依存する。
+=========================================================
+*/
+
+function draw() {
+
+    ctx.fillStyle = "#ffffff";
+
+    ctx.fillRect(
+        0,
+        0,
+        canvas.width,
+        canvas.height
+    );
+
+
+    /*
+      現在見えているワールド座標範囲。
+    */
+
+    const startX =
+        Math.floor(viewX);
+
+    const endX =
+        Math.ceil(
+            viewX +
+            canvas.width / cellSize
+        );
+
+    const startY =
+        Math.floor(viewY);
+
+    const endY =
+        Math.ceil(
+            viewY +
+            canvas.height / cellSize
+        );
+
+
+    /*
+      黒マス。
+
+      見えているY行だけを検索するので、
+      画面外の黒マスを毎回全部走査しない。
+    */
+
+    ctx.fillStyle = "#222222";
+
+    for (let y = startY; y < endY; y++) {
+
+        const row = blackRows.get(y);
+
+        if (!row) continue;
+
+        for (const x of row) {
+
+            if (x < startX || x > endX) {
+                continue;
+            }
+
+            const px =
+                (x - viewX) * cellSize;
+
+            const py =
+                (y - viewY) * cellSize;
+
+            ctx.fillRect(
+                px,
+                py,
+                cellSize,
+                cellSize
+            );
+        }
+    }
+
+
+    /*
+      グリッド線。
+
+      見えている範囲だけ描く。
+    */
+
+    ctx.beginPath();
+
+    ctx.strokeStyle =
+        cellSize <= 5
+            ? "#cccccc"
+            : "#b5b5b5";
+
+    ctx.lineWidth = 1;
+
+    for (let x = startX; x <= endX; x++) {
+
+        const px =
+            Math.round(
+                (x - viewX) * cellSize
+            ) + 0.5;
+
+        ctx.moveTo(px, 0);
+        ctx.lineTo(px, canvas.height);
+    }
+
+    for (let y = startY; y <= endY; y++) {
+
+        const py =
+            Math.round(
+                (y - viewY) * cellSize
+            ) + 0.5;
+
+        ctx.moveTo(0, py);
+        ctx.lineTo(canvas.width, py);
+    }
+
+    ctx.stroke();
+
+
+    /*
+      アリ
+    */
+
+    drawAnt(
+        ants[0],
+        "#e00000"
+    );
+
+    drawAnt(
+        ants[1],
+        "#0066dd"
+    );
+}
+
+
+/*
+=========================================================
+    アリ描画
+=========================================================
+*/
+
+function drawAnt(ant, color) {
+
+    /*
+      現在表示範囲外なら描かない。
+    */
+
+    const px =
+        (ant.x - viewX) * cellSize;
+
+    const py =
+        (ant.y - viewY) * cellSize;
+
+    if (
+        px + cellSize < 0 ||
+        py + cellSize < 0 ||
+        px > canvas.width ||
+        py > canvas.height
+    ) {
+        return;
+    }
+
+
+    const cx =
+        px + cellSize / 2;
+
+    const cy =
+        py + cellSize / 2;
+
+    const margin =
+        Math.max(
+            0.7,
+            cellSize * 0.12
+        );
+
+    const left =
+        px + margin;
+
+    const right =
+        px + cellSize - margin;
+
+    const top =
+        py + margin;
+
+    const bottom =
+        py + cellSize - margin;
+
+
+    ctx.fillStyle =
+        ant.stopped
+            ? "#777777"
+            : color;
+
+
+    ctx.beginPath();
+
+
+    if (ant.direction === 0) {
+
+        /* 上 */
+        ctx.moveTo(cx, top);
+        ctx.lineTo(right, bottom);
+        ctx.lineTo(left, bottom);
+
+    } else if (ant.direction === 1) {
+
+        /* 右 */
+        ctx.moveTo(right, cy);
+        ctx.lineTo(left, top);
+        ctx.lineTo(left, bottom);
+
+    } else if (ant.direction === 2) {
+
+        /* 下 */
+        ctx.moveTo(cx, bottom);
+        ctx.lineTo(left, top);
+        ctx.lineTo(right, top);
+
+    } else {
+
+        /* 左 */
+        ctx.moveTo(left, cy);
+        ctx.lineTo(right, bottom);
+        ctx.lineTo(right, top);
+    }
+
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth =
+        Math.max(
+            0.7,
+            cellSize * 0.08
+        );
+
+    ctx.stroke();
+}
+
+
+/*
+=========================================================
+    自動実行
+=========================================================
+*/
+
+function animationLoop(timestamp) {
+
+    if (!running) {
+        return;
+    }
+
+    if (lastTime === 0) {
+        lastTime = timestamp;
+    }
+
+    /*
+      ブラウザが一時停止した後に
+      大量の遅延ステップが発生しないよう制限。
+    */
+
+    const elapsed =
+        Math.min(
+            timestamp - lastTime,
+            100
+        );
+
+    lastTime = timestamp;
+
+    accumulatedTime += elapsed;
+
+    const interval =
+        1000 / stepsPerSecond;
+
+    const maxStepsPerFrame = 500;
+
+    let count = 0;
+
+    while (
+        accumulatedTime >= interval &&
+        count < maxStepsPerFrame
+    ) {
+
+        stepSimulation();
+
+        accumulatedTime -= interval;
+
+        count++;
+    }
+
+
+    if (count > 0) {
+        draw();
+    }
+
+
+    requestAnimationFrame(
+        animationLoop
+    );
+}
+
+
+/*
+=========================================================
+    開始 / 停止
+=========================================================
+*/
+
+function toggleRunning() {
+
+    if (running) {
+
+        running = false;
+
+        startStopButton.textContent =
+            "開始";
+
+        statusDisplay.textContent =
+            "停止中";
+
+        return;
+    }
+
+    running = true;
+
+    startStopButton.textContent =
+        "停止";
+
+    statusDisplay.textContent =
+        "実行中";
+
+    lastTime = 0;
+    accumulatedTime = 0;
+
+    requestAnimationFrame(
+        animationLoop
+    );
+}
+
+
+/*
+=========================================================
+    1マス進む
+=========================================================
+*/
+
+function oneStep() {
+
+    if (running) {
+
+        running = false;
+
+        startStopButton.textContent =
+            "開始";
+
+        statusDisplay.textContent =
+            "停止中";
+    }
+
+    stepSimulation();
+
+    draw();
+}
+
+
+/*
+=========================================================
+    間隔
+
+    数字を入力した瞬間に反映する。
+=========================================================
+*/
+
+function applySpacingImmediately() {
+
+    let value =
+        Number(
+            spacingInput.value
+        );
+
+    if (!Number.isFinite(value)) {
+        value = 0;
+    }
+
+    value =
+        Math.floor(value);
+
+    value =
+        Math.max(
+            0,
+            value
+        );
+
+    /*
+      JavaScriptの安全な整数上限を超える
+      無意味に大きな値は防ぐ。
+      「盤面サイズ」の制限ではなく、
+      数値として扱える範囲のための制限。
+    */
+
+    value =
+        Math.min(
+            Number.MAX_SAFE_INTEGER - 2,
+            value
+        );
+
+    spacing = value;
+
+    spacingInput.value =
+        spacing;
+
+    spacingValue.textContent =
+        spacing.toLocaleString();
+
+
+    /*
+      間隔を変更したら、
+      2匹の初期配置を即座に変更する。
+
+      盤面の黒マスそのものは消さない。
+      （これまでのシミュレーション状態を保持）
+    */
+
+    running = false;
+
+    startStopButton.textContent =
+        "開始";
+
+    statusDisplay.textContent =
+        "停止中";
+
+    setInitialPositions();
+
+    /*
+      変更後は中央を見る。
+    */
+
+    centerViewOnAnts();
+}
+
+
+spacingInput.addEventListener(
+    "input",
+    applySpacingImmediately
+);
+
+
+/*
+=========================================================
+    向き
+
+    変更した瞬間に現在のアリへ反映。
+    設定値はリセットしても維持。
+=========================================================
+*/
+
+ant1DirectionSelect.addEventListener(
+    "change",
+    () => {
+
+        ants[0].direction =
+            Number(
+                ant1DirectionSelect.value
+            );
+
+        draw();
+    }
+);
+
+
+ant2DirectionSelect.addEventListener(
+    "change",
+    () => {
+
+        ants[1].direction =
+            Number(
+                ant2DirectionSelect.value
+            );
+
+        draw();
+    }
+);
+
+
+/*
+=========================================================
+    速度
+=========================================================
+*/
+
+speedSlider.addEventListener(
+    "input",
+    () => {
+
+        stepsPerSecond =
+            Number(
+                speedSlider.value
+            );
+
+        speedValue.textContent =
+            stepsPerSecond.toLocaleString();
+    }
+);
+
+
+/*
+=========================================================
+    マスサイズ
+
+    5 / 10 / 20
+
+    変更後に中央へ移動。
+=========================================================
+*/
+
+cellSizeSelect.addEventListener(
+    "change",
+    () => {
+
+        cellSize =
+            Number(
+                cellSizeSelect.value
+            );
+
+        resizeCanvas();
+        centerViewOnAnts();
+    }
+);
+
+
+
+/*
+=========================================================
+    スクロールによる盤面移動
+    マスサイズは一切変更しない。
+=========================================================
+*/
+
+gridWrapper.addEventListener(
+    "wheel",
+    (event) => {
+        /*
+          ブラウザ側のページスクロールを止め、
+          マウスホイールを盤面移動として使う。
+        */
+        event.preventDefault();
+
+        const baseSpeed = 3;
+
+        /*
+          通常：縦方向へ移動。
+          Shift：横方向へ移動。
+          トラックパッド等の横スクロールにも対応。
+        */
+        let dx = event.deltaX * baseSpeed;
+        let dy = event.deltaY * baseSpeed;
+
+        if (event.shiftKey && dx === 0) {
+            dx = event.deltaY * baseSpeed;
+            dy = 0;
+        }
+
+        viewX += dx / cellSize;
+        viewY += dy / cellSize;
+
+        draw();
+    },
+    { passive: false }
+);
+
+
+/*
+  中ボタンドラッグでも盤面を移動できる。
+  マスサイズは変わらない。
+*/
+let isPanning = false;
+let panLastX = 0;
+let panLastY = 0;
+
+gridWrapper.addEventListener(
+    "mousedown",
+    (event) => {
+        if (event.button !== 1) return;
+
+        event.preventDefault();
+
+        isPanning = true;
+        panLastX = event.clientX;
+        panLastY = event.clientY;
+    }
+);
+
+window.addEventListener(
+    "mousemove",
+    (event) => {
+        if (!isPanning) return;
+
+        const dx = event.clientX - panLastX;
+        const dy = event.clientY - panLastY;
+
+        panLastX = event.clientX;
+        panLastY = event.clientY;
+
+        viewX -= dx / cellSize;
+        viewY -= dy / cellSize;
+
+        draw();
+    }
+);
+
+window.addEventListener(
+    "mouseup",
+    () => {
+        isPanning = false;
+    }
+);
+
+/*
+=========================================================
+    画面サイズ変更
+=========================================================
+*/
+
+window.addEventListener(
+    "resize",
+    () => {
+
+        resizeCanvas();
+    }
+);
+
+
+/*
+=========================================================
+    ボタン
+=========================================================
+*/
+
+startStopButton.addEventListener(
+    "click",
+    toggleRunning
+);
+
+stepButton.addEventListener(
+    "click",
+    oneStep
+);
+
+resetButton.addEventListener(
+    "click",
+    resetSimulation
+);
+
+
+/*
+=========================================================
+    初期化
+=========================================================
+*/
+
+function initialize() {
+
+    clearBoard();
+
+    spacing = 0;
+
+    cellSize = 5;
+
+    stepsPerSecond =
+        Number(
+            speedSlider.value
+        );
+
+    ant1DirectionSelect.value = "0";
+    ant2DirectionSelect.value = "0";
+
+    spacingInput.value = "0";
+
+    spacingValue.textContent = "0";
+
+    speedValue.textContent =
+        stepsPerSecond.toLocaleString();
+
+    stepCount = 0;
+
+    stepCountDisplay.textContent = "0";
+
+    setInitialPositions();
+
+    resizeCanvas();
+
+    /*
+      初期状態で中央へ。
+    */
+
+    centerViewOnAnts();
+}
+
+initialize();
+</script>
+
+</body>
+</html>
